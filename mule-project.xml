@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<mule-project xmlns="http://www.mulesoft.com/tooling/project" runtimeId="org.mule.tooling.server.3.8.4.ee" schemaVersion="5.3.0.0">
+    <name>sentiment-analysis</name>
+    <description></description>
+    <muleExtension name="Facebook" qualifier="org.mule.tooling.ui.contribution.facebook.3.5.0"/>
+    <muleExtension name="Twitter" qualifier="org.mule.tooling.ui.contribution.twitter.3.6.0"/>
+</mule-project>

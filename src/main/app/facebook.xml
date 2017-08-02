@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:quartz="http://www.mulesoft.org/schema/mule/quartz" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:context="http://www.springframework.org/schema/context" xmlns:facebook="http://www.mulesoft.org/schema/mule/facebook" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/facebook http://www.mulesoft.org/schema/mule/facebook/current/mule-facebook.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd
+http://www.mulesoft.org/schema/mule/quartz http://www.mulesoft.org/schema/mule/quartz/current/mule-quartz.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd">
+    <queued-asynchronous-processing-strategy name="Queued_Asynchronous_Processing_Strategy" maxThreads="10" doc:name="Queued Asynchronous Processing Strategy"/>
+    <queued-asynchronous-processing-strategy name="Queued_Asynchronous_Processing_Strategy1" maxThreads="30" doc:name="Queued Asynchronous Processing Strategy"/>
+	<flow name="facebookAuthorizeFlow">
+		<http:listener config-ref="HTTP_Listener_Configuration"
+			path="/fbauthorize" doc:name="HTTP" />
+		<facebook:authorize config-ref="Facebook" doc:name="Auhtorize" />
+		<flow-ref name="getPagePostsFlow" doc:name="getPagePostsFlow" />
+	</flow>
+    <flow name="facebookFlow1">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/prueba" allowedMethods="GET" doc:name="HTTP"/>
+        <logger message="Hola!!" level="INFO" doc:name="Logger"/>
+        <set-payload value="Hola!!" doc:name="Set Payload"/>
+    </flow>
+    <flow name="facebookFlow">
+        <quartz:inbound-endpoint jobName="FacebookPostRetreiver" cronExpression="${FB_cron}" repeatInterval="0" responseTimeout="10000" doc:name="Retreiving facebook posts scheduler" connector-ref="Quartz">
+            <quartz:event-generator-job/>
+        </quartz:inbound-endpoint>
+        <flow-ref name="facebookAuthorizeFlow" doc:name="facebookAuthorizeFlow"/>
+    </flow>
+
+	<flow name="getPagePostsFlow">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/pagePosts" allowedMethods="GET" doc:name="HTTP"/>
+        <expression-component doc:name="Set extract time"><![CDATA[import java.util.Calendar;
+import java.util.Date;
+
+        Calendar calendarEnd = Calendar.getInstance();       
+
+        //Set seconds and minutes to Zero
+        calendarEnd.set(Calendar.MILLISECOND, 0);
+        calendarEnd.set(Calendar.MINUTE, 0);
+        calendarEnd.set(Calendar.SECOND, 0);
+        calendarEnd.set(Calendar.HOUR, 0);
+        
+        //Current date
+        calendarEnd.set(Calendar.DAY_OF_MONTH, server.dateTime.dayOfMonth);
+        calendarEnd.set(Calendar.MONTH, server.dateTime.month);
+        calendarEnd.set(Calendar.YEAR, server.dateTime.year);
+
+		Date dateEnd = calendarEnd.getTime();
+        flowVars.today = dateEnd.toString();
+        Calendar calendarStart = calendarEnd.add(Calendar.DAY_OF_MONTH, -3);
+		Date dateStart = calendarEnd.getTime();
+        flowVars.yesterday = dateStart.toString();
+       ]]></expression-component>
+        <db:select config-ref="MySQL_Configuration" doc:name="Get fan pages companies">
+            <db:parameterized-query><![CDATA[SELECT * FROM DB_SENTIMENT.TB_COMPANIES;]]></db:parameterized-query>
+        </db:select>
+        <collection-splitter doc:name="Collection Splitter"/>
+        <flow-ref name="getPostsCommentsSubflow" doc:name="getPostsCommentsSubflow"/>
+        <collection-aggregator failOnTimeout="true" doc:name="Collection Aggregator"/>
+        <set-payload value="#['Success']" doc:name="Set Payload"/>
+	</flow>
+    <sub-flow name="getPostsCommentsSubflow">
+        <set-variable variableName="fbAccount" value="#[payload.IDCOMPANY]" doc:name="Set company fb"/>
+        <facebook:get-page-posts config-ref="Facebook" page="#[payload.FB_ACCOUNT]" since="yesterday" until="now" doc:name="Get Page Posts"/>
+        <collection-splitter doc:name="Collection Splitter"/>
+        <expression-component doc:name="Set FB account in payload"><![CDATA[payload.description=flowVars.fbAccount;]]></expression-component>
+        <vm:outbound-endpoint exchange-pattern="one-way" path="postsQueue" doc:name="Posts VM"/>
+        <collection-aggregator failOnTimeout="true" doc:name="Collection Aggregator"/>
+    </sub-flow>
+    <flow name="processPostsFBFlow" processingStrategy="Queued_Asynchronous_Processing_Strategy">
+        <vm:inbound-endpoint exchange-pattern="one-way" path="postsQueue" connector-ref="VM" doc:name="Posts VM"/>
+        <set-variable variableName="postId" value="#[payload.id]" doc:name="Set post Id"/>
+        <set-variable variableName="fbAccount" value="#[payload.description]" doc:name="Set company"/>
+        <flow-ref name="insertMessageFBSubFlow" doc:name="insertMessageFBSubFlow"/>
+        <facebook:get-post-comments config-ref="Facebook" limit="1000" post="#[flowVars.postId]" since="yesterday" until="now" doc:name="Get post comments"/>
+        <collection-splitter doc:name="Collection Splitter"/>
+        <expression-component doc:name=" FB account in payloadSet"><![CDATA[payload.type=flowVars.fbAccount;]]></expression-component>
+        <vm:outbound-endpoint exchange-pattern="one-way" path="commentsQueue" connector-ref="VM" doc:name="Comments VM"/>
+    </flow>
+    <flow name="insertCommentsFBFlow" processingStrategy="Queued_Asynchronous_Processing_Strategy">
+        <vm:inbound-endpoint exchange-pattern="one-way" path="commentsQueue" connector-ref="VM" doc:name="Comments VM"/>
+        <set-variable variableName="fbAccount" value="#[payload.type]" doc:name="Set fbAccount"/>
+        <flow-ref name="insertMessageFBSubFlow" doc:name="insertMessageFBSubFlow"/>
+    </flow>
+    <sub-flow name="insertMessageFBSubFlow">
+        <set-variable variableName="tmpPayload" value="#[payload]" doc:name="Save payload"/>
+        <set-payload value="#[payload.message]" doc:name="Set Post in Payload"/>
+        <flow-ref name="googleTranslateAPISubFlow" doc:name="googleTranslateAPISubFlow"/>
+        <http:request config-ref="HTTP_Request_Configuration_SentimentAPI" path="${http.sentiment.path}" method="POST" doc:name="HTTP Sentiment Analysis">
+            <http:request-builder>
+                <http:header headerName="Content-Type" value="text/plain"/>
+            </http:request-builder>
+        </http:request>
+        <set-variable variableName="sentiment" value="#[message.payloadAs(java.lang.String)]" doc:name="Sentiment var"/>
+        <set-payload value="#[flowVars.tmpPayload]" doc:name="Restore Payload"/>
+        <db:insert config-ref="MySQL_Configuration" autoGeneratedKeys="true" doc:name="Insert message MySQL">
+            <db:parameterized-query><![CDATA[INSERT INTO TB_POSTS (SOCIAL_NETWORK, ID_SOC_NETWORK, SENTIMENT_ID, MESSAGE, PARENT_ID, COMPANY)
+	VALUES ('facebook',#[payload.id],#[flowVars.sentiment],#[payload.message],#[flowVars.postId],#[flowVars.fbAccount]);]]></db:parameterized-query>
+        </db:insert>
+    </sub-flow>
+</mule>
